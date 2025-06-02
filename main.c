@@ -17,6 +17,13 @@
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
+enum editorKey {
+    ARROW_LEFT = 1000,
+    ARROW_RIGHT,
+    ARROW_UP,
+    ARROW_DOWN
+};
+
 /************\
 |*** data ***|
 \************/
@@ -65,14 +72,31 @@ void enableRawMode(void)
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) die("tcsetattrE");  // set new attributes from raw
 }
 
-char editorReadKey(void)
+int editorReadKey(void)
 {
     int nread;
     char c;
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1) {
         if (nread == -1 && errno != EAGAIN) die("read");
     }
-    return c;
+    if (c == '\x1b') {
+        char seq[3];
+
+        if (read(STDIN_FILENO, &seq[0], 1) != 1) return '\x1b';
+        if (read(STDIN_FILENO, &seq[1], 1) != 1) return '\x1b';
+
+        if (seq[0] == '[') {
+            switch (seq[1]) {
+                case 'A': return ARROW_UP;
+                case 'B': return ARROW_DOWN;
+                case 'C': return ARROW_RIGHT;
+                case 'D': return ARROW_LEFT;
+            }
+        }
+        return '\x1b';
+    } else {
+        return c;
+    }
 }
 
 int getCursorPosition(int* rows, int* cols)
@@ -168,37 +192,67 @@ void editorDrawRows(struct abuf* ab)
 void editorRefreshScreen(void)
 {
     struct abuf ab = ABUF_INIT;
+
     abAppend(&ab, "\x1b[?25l", 6);
     abAppend(&ab, "\x1b[H", 3);
+
     editorDrawRows(&ab);
-    abAppend(&ab, "\x1b[H", 3);
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    abAppend(&ab, buf, strlen(buf));
+
     abAppend(&ab, "\x1b[?25h", 6);
+
     write(STDOUT_FILENO, ab.b, ab.len);
     abFree(&ab);
-                                        // writing out 4 bytes to the terminal. First, "\x1b" is the escape character, 27 in decimal
-                                        // 2nd, 3rd, and 4th are [, 2, and J, respectively. escape sequences always start with the
-                                        // escape char followed by a [. The command used here is J (Erase In Display), with 2 being
-//    write(STDOUT_FILENO, "\x1b[2J", 4); // its argument which says to clear the whole screen. we are using VT100 esc sequences.
-    
-//    write(STDOUT_FILENO, "\x1b[H", 3);  // H command (cursor pos) will put cursor at the first row & first column 
-
-//    editorDrawRows();
-
-//    write(STDOUT_FILENO, "\x1b[H", 3);
 }
 
 /*************\
 |*** input ***|
 \*************/
+void editorMoveCursor(int key)
+{
+    switch (key) {
+        case ARROW_LEFT:
+            if (E.cx != 0) {
+                E.cx--;
+            }
+            break;
+        case ARROW_DOWN:
+            if (E.cy != E.screenrows - 1) {
+                E.cy++;
+            }
+            break;
+        case ARROW_UP:
+            if (E.cy != 0) {
+                E.cy--;
+            }
+            break;
+        case ARROW_RIGHT:
+            if (E.cx != E.screencols - 1) {
+                E.cx++;
+            }
+            break;
+    }
+}
+
 void editorProcessKeypress(void)
 {
-    char c = editorReadKey();
+    int c = editorReadKey();
 
     switch (c) {
         case CTRL_KEY('q'):
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
+            break;
+
+        case ARROW_UP:
+        case ARROW_DOWN:
+        case ARROW_LEFT:
+        case ARROW_RIGHT:
+            editorMoveCursor(c);
             break;
     }
 }
