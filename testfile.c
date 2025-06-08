@@ -1,3 +1,7 @@
+
+
+	With on for after at by and against instead of
+
 /***************\
 |*** include ***|
 \***************/
@@ -24,7 +28,6 @@
 \**************/
 #define tedVER "0.0.1"
 #define TED_TAB_STOP 8
-#define TED_QUIT_TIMES 3
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
@@ -69,8 +72,6 @@ struct editorConfig E;              // initialize as variable E
 |*** prototypes ***|
 \******************/
 void editorSetStatusMessage(const char* fmt, ...);
-void editorRefreshScreen(void);
-char* editorPrompt(char* prompt);
 
 /****************\
 |*** terminal ***|
@@ -209,14 +210,10 @@ void editorUpdateRow(erow* row)
     row->render[idx] = '\0';
     row->rsize = idx;
 }
-
-void editorInsertRow(int at, char* s, size_t len)
+void editorAppendRow(char* s, size_t len)
 {
-    if (at < 0 || at > E.numrows) return;
-
     E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
-    memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
-
+    int at = E.numrows;
     E.row[at].size = len;
     E.row[at].chars = malloc(len + 1);
     memcpy(E.row[at].chars, s, len);
@@ -227,21 +224,6 @@ void editorInsertRow(int at, char* s, size_t len)
     editorUpdateRow(&E.row[at]);
 
     E.numrows++;
-    E.dirty++;
-}
-
-void editorFreeRow(erow* row)
-{
-    free(row->render);
-    free(row->chars);
-}
-
-void editorDelRow(int at)
-{
-    if (at < 0 || at >= E.numrows) return;
-    editorFreeRow(&E.row[at]);
-    memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
-    E.numrows--;
     E.dirty++;
 }
 
@@ -256,68 +238,16 @@ void editorRowInsertChar(erow* row, int at, int c)
     E.dirty++;
 }
 
-void editorRowAppendString(erow* row, char* s, size_t len)
-{
-    row->chars = realloc(row->chars, row->size + len + 1);
-    memcpy(&row->chars[row->size], s, len);
-    row->size += len;
-    row->chars[row->size] = '\0';
-    editorUpdateRow(row);
-    E.dirty++;
-}
-
-void editorRowDelChar(erow* row, int at)
-{
-    if (at < 0 || at >= row->size) return;
-    memmove(&row->chars[at], &row->chars[at + 1], row->size - at);
-    row->size--;
-    editorUpdateRow(row);
-    E.dirty++;
-}
-
 /*************************\
 |*** editor operations ***|
 \*************************/
 void editorInsertChar(int c)
 {
     if (E.cy == E.numrows) {
-        editorInsertRow(E.numrows, "", 0);
+        editorAppendRow("", 0);
     }
     editorRowInsertChar(&E.row[E.cy], E.cx, c);
     E.cx++;
-}
-
-void editorInsertNewline(void)
-{
-    if (E.cx == 0) {
-        editorInsertRow(E.cy, "", 0);
-    } else {
-        erow* row = &E.row[E.cy];
-        editorInsertRow(E.cy + 1, &row->chars[E.cx], row->size - E.cx);
-        row = &E.row[E.cy];
-        row->size = E.cx;
-        row->chars[row->size] = '\0';
-        editorUpdateRow(row);
-    }
-    E.cy++;
-    E.cx = 0;
-}
-
-void editorDelChar(void)
-{
-    if (E.cy == E.numrows) return;
-    if (E.cx == 0 && E.cy == 0) return;
-
-    erow* row = &E.row[E.cy];
-    if (E.cx > 0) {
-        editorRowDelChar(row, E.cx - 1);
-        E.cx--;
-    } else {
-        E.cx = E.row[E.cy - 1].size;
-        editorRowAppendString(&E.row[E.cy - 1], row->chars, row->size);
-        editorDelRow(E.cy);
-        E.cy--;
-    }
 }
 
 /****************\
@@ -358,7 +288,7 @@ void editorOpen(char* filename)
         while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r')) {
             linelen--;
         }
-        editorInsertRow(E.numrows, line, linelen);
+        editorAppendRow(line, linelen);
     }
     free(line);
     fclose(fp);
@@ -369,13 +299,7 @@ void editorSave(void)
 {
     /* if its a new file, E.filename will be NULL and we wont know where to save it, so
      * we just return for now. */
-    if (E.filename == NULL) {
-        E.filename = editorPrompt("Save as: %s (ESC to cancel)");
-        if (E.filename == NULL) {
-            editorSetStatusMessage("Save aborted");
-            return;
-        }
-    }
+    if (E.filename == NULL) return;
 
     /* otherwise we call editorRowsToString, and write() the string to the path in E.filename. */
     int len;
@@ -549,41 +473,6 @@ void editorSetStatusMessage(const char* fmt, ...)
 /*************\
 |*** input ***|
 \*************/
-char* editorPrompt(char* prompt)
-{
-    size_t bufsize = 128;
-    char* buf = malloc(bufsize);
-
-    size_t buflen = 0;
-    buf[0] = '\0';
-
-    while (1) {
-        editorSetStatusMessage(prompt, buf);
-        editorRefreshScreen();
-
-        int c = editorReadKey();
-        if (c == DEL_KEY || c == CTRL_KEY('h') || c == BACKSPACE) {
-            if (buflen != 0) buf[--buflen] = '\0';
-        } else if (c == '\x1b') {
-            editorSetStatusMessage("");
-            free(buf);
-            return NULL;
-        } else if (c == '\r') {
-            if (buflen != 0) {
-                editorSetStatusMessage("");
-                return buf;
-            }
-        } else if (!iscntrl(c) && c < 128) {
-            if (buflen == bufsize - 1) {
-                bufsize *= 2;
-                buf = realloc(buf, bufsize);
-            }
-            buf[buflen++] = c;
-            buf[buflen] = '\0';
-        }
-    }
-}
-
 void editorMoveCursor(int key)
 {
     erow* row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
@@ -625,21 +514,13 @@ void editorMoveCursor(int key)
 
 void editorProcessKeypress(void)
 {
-    static int quit_times = TED_QUIT_TIMES;
-
     int c = editorReadKey();
 
     switch (c) {
         case '\r':
-            editorInsertNewline();
+            /* TODO */
             break;
         case CTRL_KEY('q'):
-            if (E.dirty && quit_times > 0) {
-                editorSetStatusMessage("WARNING!!! File has unsaved changes. "
-                                       "Press Ctrl-Q %d more times to quit.", quit_times);
-                quit_times--;
-                return;
-            }
             write(STDOUT_FILENO, "\x1b[2J", 4);
             write(STDOUT_FILENO, "\x1b[H", 3);
             exit(0);
@@ -652,8 +533,7 @@ void editorProcessKeypress(void)
         case BACKSPACE:
         case CTRL_KEY('h'):
         case DEL_KEY:
-            if (c == DEL_KEY) editorMoveCursor(ARROW_RIGHT);
-            editorDelChar();
+            /* TODO */
             break;
 
         case ARROW_UP:
@@ -671,7 +551,6 @@ void editorProcessKeypress(void)
             editorInsertChar(c);
             break;
     }
-    quit_times = TED_QUIT_TIMES;
 }
 
 /************\
